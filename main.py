@@ -1,10 +1,8 @@
 # main.py
 import streamlit as st
 import logging
-import os
-from utils.config import TEMP_DIR, MAPPINGS_DIR
-import json
-# Set page config as the first Streamlit command
+
+# Set page config
 st.set_page_config(
     page_title="B2C Retailer Analytics",
     page_icon="🏪",
@@ -12,55 +10,44 @@ st.set_page_config(
 )
 
 # Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler("etl_pipeline.log"),
-        logging.StreamHandler()
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize session state
-# In main.py, modify init_session_state
+# Initialize clean session state
 def init_session_state():
-    if 'csv_paths' not in st.session_state:
-        st.session_state.csv_paths = {}
-    if 'table_mapping' not in st.session_state:
-        st.session_state.table_mapping = {}
-    if 'column_mappings' not in st.session_state:
-        st.session_state.column_mappings = {}
-    if 'source_engine' not in st.session_state:
-        st.session_state.source_engine = None
-    if 'source_conn' not in st.session_state:
-        st.session_state.source_conn = None
-    if 'db_path' not in st.session_state and os.path.exists(os.path.join(TEMP_DIR, "db_*.sqlite")):
-        db_files = [f for f in os.listdir(TEMP_DIR) if f.startswith("db_") and f.endswith(".sqlite")]
-        if db_files:
-            st.session_state.db_path = os.path.join(TEMP_DIR, db_files[-1])
-            st.session_state.db_type = "sqlite"
-            st.session_state.db_params = {'db_path': st.session_state.db_path}
-    elif 'db_params' not in st.session_state and os.path.exists(os.path.join(MAPPINGS_DIR, "db_params.json")):
-        with open(os.path.join(MAPPINGS_DIR, "db_params.json"), "r") as f:
-            st.session_state.db_params = json.load(f)
-            st.session_state.db_type = "postgresql" if st.session_state.db_params.get('port') == "5432" else "mysql"
-    if 'target_engine' not in st.session_state:
-        st.session_state.target_engine = None
-    if 'target_conn' not in st.session_state:
-        st.session_state.target_conn = None
+    """Initialize session state with clean defaults"""
+    defaults = {
+        'source_engine': None,
+        'source_conn': None,
+        'source_tables': [],
+        'source_table_columns': {},
+        'table_mapping': {},
+        'column_mappings': {},
+        'csv_paths': {},
+        'db_type': None,
+        'db_params': {},
+        'uploaded_filename': None
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
 
-# Main app
+# Initialize app
 init_session_state()
 
-st.title("🏪 B2C Retailer Analytics - Advanced ETL Pipeline")
-st.markdown("**Navigate through the steps to connect, map, transform, and analyze your data.**")
+# Main interface
+st.title("🏪 B2C Retailer Analytics")
+st.markdown("**Advanced ETL Pipeline for French Retail Data**")
 
-# Navigation
+# Simple navigation
 page = st.sidebar.selectbox(
-    "Select Page",
-    ["Setup", "Transform & Export", "Dashboard"]
+    "Navigate",
+    ["Setup", "Transform & Export", "Dashboard"],
+    help="Choose a step in the ETL pipeline"
 )
 
+# Page routing
 if page == "Setup":
     from app_pages.setup import setup_page
     setup_page()
