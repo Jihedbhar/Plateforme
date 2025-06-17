@@ -5,5 +5,4 @@ sqlalchemy
 psycopg2-binary
 mysql-connector-python
 numpy
-itertools
 requests
