@@ -41,9 +41,149 @@ def transform_page():
     # Main transformation interface
     handle_column_mapping_and_export()
     
+    # Bulk export button - positioned prominently
+    show_bulk_export_section()
+    
     # Final export summary
     if st.session_state.get('csv_paths'):
         show_export_summary()
+
+def show_bulk_export_section():
+    """Show bulk export section for all mapped tables"""
+    
+    column_mappings = st.session_state.get('column_mappings', {})
+    table_mapping = st.session_state.get('table_mapping', {})
+    csv_paths = st.session_state.get('csv_paths', {})
+    
+    # Count tables with mappings
+    tables_with_mappings = []
+    for target_table, source_table in table_mapping.items():
+        if source_table != 'None' and target_table in column_mappings and column_mappings[target_table]:
+            tables_with_mappings.append((target_table, source_table))
+    
+    if not tables_with_mappings:
+        return
+    
+    st.markdown("---")
+    st.header("🚀 Bulk Export")
+    
+    # Show what will be exported
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.info(f"**{len(tables_with_mappings)} tables** ready for export with column mappings configured")
+        
+        # Show summary of what will be exported
+        with st.expander("📋 Export Preview", expanded=False):
+            for target_table, source_table in tables_with_mappings:
+                mapping = column_mappings.get(target_table, {})
+                cols_mapped = len(mapping)
+                st.write(f"• **{target_table}** ← {source_table} ({cols_mapped} columns)")
+    
+    with col2:
+        # Check if any tables are already exported
+        already_exported = [table for table, _ in tables_with_mappings if table in csv_paths]
+        not_exported = [table for table, _ in tables_with_mappings if table not in csv_paths]
+        
+        if already_exported:
+            st.success(f"✅ {len(already_exported)} already exported")
+        if not_exported:
+            st.warning(f"⏳ {len(not_exported)} pending export")
+    
+    # Bulk export button
+    if not_exported:
+        if st.button("🚀 **Export All Mapped Tables**", type="primary", use_container_width=True):
+            perform_bulk_export(tables_with_mappings)
+    
+    # Re-export all button
+    if already_exported:
+        if st.button("🔄 **Re-export All Tables**", type="secondary", use_container_width=True):
+            perform_bulk_export(tables_with_mappings, force_reexport=True)
+
+def perform_bulk_export(tables_with_mappings, force_reexport=False):
+    """Perform bulk export of all mapped tables"""
+    
+    column_mappings = st.session_state.get('column_mappings', {})
+    csv_paths = st.session_state.get('csv_paths', {})
+    
+    # Initialize session state if needed
+    if 'csv_paths' not in st.session_state:
+        st.session_state.csv_paths = {}
+    
+    # Progress tracking
+    total_tables = len(tables_with_mappings)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    successful_exports = 0
+    failed_exports = []
+    
+    for i, (target_table, source_table) in enumerate(tables_with_mappings):
+        # Skip if already exported (unless force re-export)
+        if not force_reexport and target_table in csv_paths:
+            successful_exports += 1
+            progress_bar.progress((i + 1) / total_tables)
+            status_text.text(f"Skipping {target_table} (already exported)...")
+            continue
+        
+        status_text.text(f"Exporting {target_table}... ({i + 1}/{total_tables})")
+        
+        try:
+            # Get column mapping and transformations for this table
+            column_mapping = column_mappings.get(target_table, {})
+            transformations = []  # You can extend this to get transformations from session state
+            
+            # Create temporary file for export
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+            csv_path = temp_file.name
+            temp_file.close()
+            
+            # Perform export
+            success = transform_and_export(
+                engine=st.session_state.source_engine,
+                table_name=source_table,
+                columns=list(column_mapping.values()),
+                target_columns=list(column_mapping.keys()),
+                output_path=csv_path,
+                transformations=transformations
+            )
+            
+            if success:
+                st.session_state.csv_paths[target_table] = csv_path
+                successful_exports += 1
+                status_text.text(f"✅ {target_table} exported successfully!")
+            else:
+                failed_exports.append(target_table)
+                status_text.text(f"❌ Failed to export {target_table}")
+                
+        except Exception as e:
+            failed_exports.append(target_table)
+            status_text.text(f"❌ Error exporting {target_table}: {str(e)}")
+            logger.error(f"Bulk export error for {target_table}: {e}")
+        
+        # Update progress
+        progress_bar.progress((i + 1) / total_tables)
+    
+    # Final status
+    progress_bar.progress(1.0)
+    
+    if successful_exports == total_tables:
+        status_text.empty()
+        st.success(f"🎉 **All {total_tables} tables exported successfully!**")
+        st.balloons()
+    elif successful_exports > 0:
+        status_text.empty()
+        st.warning(f"⚠️ **{successful_exports}/{total_tables} tables exported successfully**")
+        if failed_exports:
+            st.error(f"Failed exports: {', '.join(failed_exports)}")
+    else:
+        status_text.empty()
+        st.error("❌ **No tables were exported successfully**")
+        if failed_exports:
+            st.error(f"Failed exports: {', '.join(failed_exports)}")
+    
+    # Auto-refresh to show updated state
+    st.rerun()
 
 def handle_column_mapping_and_export():
     """Handle column mapping and data export for each table"""
@@ -59,7 +199,7 @@ def handle_column_mapping_and_export():
         if source_table == 'None':
             continue
             
-        with st.expander(f"🔧 Configure {target_table} ← {source_table}", expanded=True):
+        with st.expander(f"🔧 Configure {target_table} ← {source_table}", expanded=False):
             
             # Get column information
             expected_columns = list(DEFAULT_COLUMN_MAPPINGS.get(target_table, {}).keys())
@@ -85,10 +225,9 @@ def handle_column_mapping_and_export():
                 if table_transformations:
                     transformations[target_table] = table_transformations
 
-            # Export interface
+            # Show export status (but remove individual export buttons)
             if column_mapping:
-                st.subheader("📤 Export Data")
-                handle_data_export(target_table, source_table, column_mapping, transformations.get(target_table, []))
+                show_table_export_status(target_table, source_table)
             
             # Data preview - Using checkbox instead of nested expander
             st.subheader("👀 Data Preview")
@@ -98,6 +237,46 @@ def handle_column_mapping_and_export():
     # Save final state
     if column_mappings != st.session_state.get('column_mappings', {}):
         st.session_state.column_mappings = column_mappings
+
+def show_table_export_status(target_table, source_table):
+    """Show export status for a table without individual export buttons"""
+    
+    csv_paths = st.session_state.get('csv_paths', {})
+    column_mappings = st.session_state.get('column_mappings', {})
+    
+    st.subheader("📤 Export Status")
+    
+    if target_table in csv_paths:
+        st.success(f"✅ **{target_table}** is ready for export (mapped columns configured)")
+        
+        # Show preview if already exported
+        try:
+            df_preview = pd.read_csv(csv_paths[target_table], nrows=3)
+            st.write("**Preview (first 3 rows):**")
+            st.dataframe(df_preview, use_container_width=True)
+        except Exception as e:
+            st.caption("Preview unavailable")
+            
+        # Download individual file option
+        col1, col2 = st.columns(2)
+        with col1:
+            try:
+                with open(csv_paths[target_table], 'rb') as f:
+                    st.download_button(
+                        label=f"📁 Download {target_table}.csv",
+                        data=f.read(),
+                        file_name=f"{target_table}.csv",
+                        mime="text/csv",
+                        key=f"individual_download_{target_table}"
+                    )
+            except Exception as e:
+                st.error(f"Download error: {e}")
+    else:
+        column_mapping = column_mappings.get(target_table, {})
+        if column_mapping:
+            st.info(f"📋 **{target_table}** configured with {len(column_mapping)} mapped columns - ready for bulk export")
+        else:
+            st.warning("⚠️ Configure column mappings first")
 
 def configure_column_mapping(target_table, expected_columns, source_columns):
     """Configure column mappings for a table"""
@@ -142,6 +321,11 @@ def configure_column_mapping(target_table, expected_columns, source_columns):
             st.caption(f"Unmapped: {', '.join(unmapped)}")
     else:
         st.warning("⚠️ No columns mapped yet")
+    
+    # Save to session state
+    if 'column_mappings' not in st.session_state:
+        st.session_state.column_mappings = {}
+    st.session_state.column_mappings[target_table] = column_mapping
     
     return column_mapping
 
@@ -210,91 +394,6 @@ def configure_transformations(target_table, column_mapping, source_columns):
     
     return transformations
 
-def handle_data_export(target_table, source_table, column_mapping, transformations):
-    """Handle data export for a table"""
-    
-    # Check if already exported
-    csv_paths = st.session_state.get('csv_paths', {})
-    
-    if target_table in csv_paths:
-        st.success(f"✅ **{target_table}** already exported!")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button(f"📁 Download {target_table}.csv", key=f"download_{target_table}"):
-                try:
-                    with open(csv_paths[target_table], 'rb') as f:
-                        st.download_button(
-                            label=f"⬇️ Download {target_table}.csv",
-                            data=f.read(),
-                            file_name=f"{target_table}.csv",
-                            mime="text/csv"
-                        )
-                except Exception as e:
-                    st.error(f"Download error: {e}")
-        
-        with col2:
-            if st.button(f"🔄 Re-export {target_table}", key=f"reexport_{target_table}"):
-                perform_export(target_table, source_table, column_mapping, transformations)
-        return
-    
-    # Export button for new exports
-    export_info = f"Export **{target_table}** with {len(column_mapping)} mapped columns"
-    if transformations:
-        export_info += f" and {len(transformations)} transformations"
-    
-    st.info(export_info)
-    
-    if st.button(f"🚀 Export {target_table}", key=f"export_{target_table}", type="primary"):
-        perform_export(target_table, source_table, column_mapping, transformations)
-
-def perform_export(target_table, source_table, column_mapping, transformations):
-    """Perform the actual data export"""
-    
-    # Create temporary file for export
-    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
-    csv_path = temp_file.name
-    temp_file.close()
-    
-    with st.spinner(f"Exporting {target_table}..."):
-        try:
-            success = transform_and_export(
-                engine=st.session_state.source_engine,
-                table_name=source_table,
-                columns=list(column_mapping.values()),
-                target_columns=list(column_mapping.keys()),
-                output_path=csv_path,
-                transformations=transformations
-            )
-            
-            if success:
-                # Store in session state
-                if 'csv_paths' not in st.session_state:
-                    st.session_state.csv_paths = {}
-                st.session_state.csv_paths[target_table] = csv_path
-                
-                # Store column mappings
-                if 'column_mappings' not in st.session_state:
-                    st.session_state.column_mappings = {}
-                st.session_state.column_mappings[target_table] = column_mapping
-                
-                st.success(f"✅ **{target_table}** exported successfully!")
-                
-                # Show preview
-                try:
-                    df_preview = pd.read_csv(csv_path, nrows=3)
-                    st.write("**Preview (first 3 rows):**")
-                    st.dataframe(df_preview, use_container_width=True)
-                except Exception as e:
-                    st.warning(f"Could not preview: {e}")
-                
-                st.rerun()
-            else:
-                st.error(f"❌ Failed to export {target_table}")
-                
-        except Exception as e:
-            st.error(f"❌ Export error: {e}")
-
 def show_data_preview(source_table):
     """Show data preview for a source table"""
     try:
@@ -322,13 +421,13 @@ def show_export_summary():
     
     # Summary metrics
     total_exported = len(csv_paths)
-    total_mapped = len(st.session_state.get('table_mapping', {}))
+    total_mapped = len([t for t in column_mappings.values() if t])  # Only count tables with actual mappings
     
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Tables Exported", total_exported)
     with col2:
-        st.metric("Total Tables", total_mapped)
+        st.metric("Tables Mapped", total_mapped)
     with col3:
         completion = f"{(total_exported/total_mapped*100):.0f}%" if total_mapped > 0 else "0%"
         st.metric("Completion", completion)
@@ -368,7 +467,6 @@ def show_export_summary():
     # Final completion
     if total_exported == total_mapped and total_exported > 0:
         st.success("🎉 All tables exported successfully! Ready for analysis.")
-        st.balloons()
         
         # Download all as ZIP option
         if st.button("📦 Download All Files as ZIP", type="primary"):
